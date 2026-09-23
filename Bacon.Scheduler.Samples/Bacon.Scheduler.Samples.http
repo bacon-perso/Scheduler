@@ -1,0 +1,6 @@
+@Bacon.Scheduler.Samples_HostAddress = http://localhost:5291
+
+GET {{Bacon.Scheduler.Samples_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

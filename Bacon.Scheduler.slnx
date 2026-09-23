@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+  </Folder>
+  <Project Path="Bacon.Scheduler.Samples/Bacon.Scheduler.Samples.csproj" />
+  <Project Path="Bacon.Scheduler.Tests/Bacon.Scheduler.Tests.csproj" Id="a61c56a7-40ca-4dd7-9e9f-83aa2735f887" />
+  <Project Path="Bacon.Scheduler/Bacon.Scheduler.csproj" />
+</Solution>
