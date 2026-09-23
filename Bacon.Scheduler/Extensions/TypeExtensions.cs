@@ -42,7 +42,7 @@ internal static class TypeExtensions
 
             bool parameterTypesMatched = true;
 
-            Type?[]? genericArguments = methodCandidate.ContainsGenericParameters ? new Type[methodCandidate.GetGenericArguments().Length] : null;
+            Type[]? genericArguments = methodCandidate.ContainsGenericParameters ? new Type[methodCandidate.GetGenericArguments().Length] : null;
 
             // Determining whether we can use this method candidate with current parameter types.
             for (int idx = 0; idx < parameters.Length; idx++)
