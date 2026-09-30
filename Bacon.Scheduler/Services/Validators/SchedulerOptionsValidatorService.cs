@@ -20,7 +20,7 @@ internal class SchedulerOptionsValidatorService : IValidateOptions<SchedulerOpti
         }
         catch
         {
-            errors.Add("Scheduler - The tenant ID cannot be null/empty and cannot be longer than 50 characters and only supports the following characters ('A-Z', 'a-z', '0-9', '.', '_', '-', ':'");
+            errors.Add(TenantValidationService.TenantErrorMessage);
         }
 
         if (schedulerOptions.ConcurrencyRateLimiter is { ConcurrencyRateLimitProvider: ConcurrencyRateLimitProviders.Redis, ConnectionMultiplexerFactory: null })
