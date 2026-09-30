@@ -4,11 +4,13 @@ using Bacon.Scheduler.Interfaces.Services.Batches;
 using Bacon.Scheduler.Interfaces.Services.Jobs;
 using Bacon.Scheduler.Interfaces.Services.Jobs.JobLogs;
 using Bacon.Scheduler.Interfaces.Services.Queues;
+using Bacon.Scheduler.Interfaces.Services.RateLimiters;
 using Bacon.Scheduler.Interfaces.Services.Schedules;
 using Bacon.Scheduler.Models;
 using Bacon.Scheduler.Models.Jobs;
 using Bacon.Scheduler.Models.Schedules;
 using Bacon.Scheduler.Services.Queues;
+using Bacon.Scheduler.Services.RateLimiters;
 using Bacon.Scheduler.Services.Schedules;
 using Bacon.Scheduler.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,100 +55,142 @@ public class SchedulerExtensionsTests
         });
     }
 
-    [Test]
-    public void AddScheduler_PeriodicTimerIntervalBelowFiveSeconds_ThrowsArgumentOutOfRange()
+    // Options are validated by ValidateOnStart, so failures surface when the startup validator runs rather than from AddScheduler.
+    private static OptionsValidationException ValidateOnStartExpectingFailure(Action<SchedulerOptions> configure)
     {
         ServiceCollection services = NewServices();
+        services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(configure);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = "test-tenant";
-                o.PeriodicTimerInterval = TimeSpan.FromSeconds(1);
-            }));
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        return Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IStartupValidator>().Validate())!;
+    }
+
+    private static void AssertStartupValidationPasses(Action<SchedulerOptions> configure)
+    {
+        ServiceCollection services = NewServices();
+        services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(configure);
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        Assert.DoesNotThrow(() => provider.GetRequiredService<IStartupValidator>().Validate());
     }
 
     [Test]
-    public void AddScheduler_PeriodicTimerIntervalAboveOneHour_ThrowsArgumentOutOfRange()
+    public void AddScheduler_InvalidOptions_DoesNotThrowUntilStartupValidation()
     {
         ServiceCollection services = NewServices();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = "test-tenant";
-                o.PeriodicTimerInterval = TimeSpan.FromHours(2);
-            }));
+        Assert.DoesNotThrow(() =>
+            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o => o.TenantId = ""));
+    }
+
+    [Test]
+    public void AddScheduler_PeriodicTimerIntervalBelowFiveSeconds_FailsStartupValidation()
+    {
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.PeriodicTimerInterval = TimeSpan.FromSeconds(1);
+        });
+
+        Assert.That(ex.Failures, Has.One.Contain("periodic timer interval"));
+    }
+
+    [Test]
+    public void AddScheduler_PeriodicTimerIntervalAboveOneHour_FailsStartupValidation()
+    {
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.PeriodicTimerInterval = TimeSpan.FromHours(2);
+        });
+
+        Assert.That(ex.Failures, Has.One.Contain("periodic timer interval"));
     }
 
     [TestCase(5)]
     [TestCase(60)]
     [TestCase(3600)]
-    public void AddScheduler_PeriodicTimerIntervalWithinBounds_DoesNotThrow(int seconds)
+    public void AddScheduler_PeriodicTimerIntervalWithinBounds_PassesStartupValidation(int seconds)
     {
-        ServiceCollection services = NewServices();
-
-        Assert.DoesNotThrow(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = "test-tenant";
-                o.PeriodicTimerInterval = TimeSpan.FromSeconds(seconds);
-            }));
+        AssertStartupValidationPasses(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.PeriodicTimerInterval = TimeSpan.FromSeconds(seconds);
+        });
     }
 
     [TestCase(null)]
     [TestCase("")]
     [TestCase("has spaces")]
     [TestCase("has/slash")]
-    public void AddScheduler_InvalidTenantId_ThrowsArgumentException(string? tenantId)
+    public void AddScheduler_InvalidTenantId_FailsStartupValidation(string? tenantId)
     {
-        ServiceCollection services = NewServices();
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o => o.TenantId = tenantId!);
 
-        Assert.Throws<ArgumentException>(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = tenantId!;
-            }));
+        Assert.That(ex.Failures, Has.One.Contain("tenant ID"));
     }
 
     [Test]
-    public void AddScheduler_TenantIdLongerThan50Characters_ThrowsArgumentException()
+    public void AddScheduler_TenantIdLongerThan50Characters_FailsStartupValidation()
     {
-        ServiceCollection services = NewServices();
         string tooLong = new('a', 51);
 
-        Assert.Throws<ArgumentException>(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = tooLong;
-            }));
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o => o.TenantId = tooLong);
+
+        Assert.That(ex.Failures, Has.One.Contain("tenant ID"));
     }
 
     [Test]
-    public void AddScheduler_RedisProviderWithoutConnectionFactory_ThrowsInvalidOperation()
+    public void AddScheduler_RedisProviderWithoutConnectionFactory_FailsStartupValidation()
     {
-        ServiceCollection services = NewServices();
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = ConcurrencyRateLimitProviders.Redis;
+        });
 
-        Assert.Throws<InvalidOperationException>(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = "test-tenant";
-                o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = ConcurrencyRateLimitProviders.Redis;
-            }));
+        Assert.That(ex.Failures, Has.One.Contain("ConnectionMultiplexerFactory"));
     }
 
     [Test]
-    public void AddScheduler_RedisProviderWithConnectionFactory_DoesNotThrow()
+    public void AddScheduler_RedisProviderWithConnectionFactory_PassesStartupValidation()
+    {
+        AssertStartupValidationPasses(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = ConcurrencyRateLimitProviders.Redis;
+            o.ConcurrencyRateLimiter.ConnectionMultiplexerFactory = _ => default(IConnectionMultiplexer)!;
+        });
+    }
+
+    [Test]
+    public void AddScheduler_MultipleInvalidOptions_ReportsEveryFailure()
+    {
+        OptionsValidationException ex = ValidateOnStartExpectingFailure(o =>
+        {
+            o.TenantId = "";
+            o.PeriodicTimerInterval = TimeSpan.FromSeconds(1);
+            o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = ConcurrencyRateLimitProviders.Redis;
+        });
+
+        Assert.That(ex.Failures.Count(), Is.EqualTo(3));
+    }
+
+    [TestCase(ConcurrencyRateLimitProviders.Local, typeof(LocalRateLimiterService))]
+    [TestCase(ConcurrencyRateLimitProviders.Redis, typeof(RedisRateLimiterService))]
+    public void AddScheduler_ConcurrencyProvider_RegistersMatchingLimiter(ConcurrencyRateLimitProviders provider, Type expectedImplementation)
     {
         ServiceCollection services = NewServices();
 
-        Assert.DoesNotThrow(() =>
-            services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
-            {
-                o.TenantId = "test-tenant";
-                o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = ConcurrencyRateLimitProviders.Redis;
-                o.ConcurrencyRateLimiter.ConnectionMultiplexerFactory = _ => default(IConnectionMultiplexer)!;
-            }));
+        services.AddScheduler<FakeScheduleStore, FakeScheduleQueueStore, FakeBatchStore, FakeJobStore>(o =>
+        {
+            o.TenantId = "test-tenant";
+            o.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider = provider;
+        });
+
+        Assert.That(services.Any(d => d.ServiceType == typeof(IConcurrencyRateLimiterService) && d.ImplementationType == expectedImplementation), Is.True);
     }
 
     #endregion

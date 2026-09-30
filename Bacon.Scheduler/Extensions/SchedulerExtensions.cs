@@ -14,8 +14,10 @@ using Bacon.Scheduler.Services.Jobs;
 using Bacon.Scheduler.Services.Queues;
 using Bacon.Scheduler.Services.RateLimiters;
 using Bacon.Scheduler.Services.Schedules;
+using Bacon.Scheduler.Services.Validators;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using System.Linq.Expressions;
 
 namespace Bacon.Scheduler.Extensions;
@@ -35,38 +37,40 @@ public static class SchedulerExtensions
     /// <typeparam name="TBatchStore">The batch store implementation</typeparam>
     /// <typeparam name="TJobStore">The job store implementation</typeparam>
     /// <param name="services">The service collection</param>
-    /// <param name="options">The scheduler configurable options</param>
+    /// <param name="configureOptions">The scheduler configurable options</param>
     /// <returns></returns>
-    public static ISchedulerBuilder AddScheduler<TScheduleStore, TScheduleQueueStore, TBatchStore, TJobStore>(this IServiceCollection services, Action<SchedulerOptions> options)
+    public static ISchedulerBuilder AddScheduler<TScheduleStore, TScheduleQueueStore, TBatchStore, TJobStore>(this IServiceCollection services, Action<SchedulerOptions> configureOptions)
         where TScheduleStore : class, IScheduleStore
         where TScheduleQueueStore : class, IScheduleQueueStore
         where TBatchStore : class, IBatchStore
         where TJobStore : class, IJobStore
     {
-        SchedulerOptions schedulerOptions = new();
-        options(schedulerOptions);
+        services.AddOptions<SchedulerOptions>()
+            .Configure(configureOptions)
+            .ValidateOnStart();
 
-        ValidateOptions(schedulerOptions);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<SchedulerOptions>, SchedulerOptionsValidatorService>());
 
         services.AddStore<IScheduleStore, TScheduleStore>();
         services.AddStore<IScheduleQueueStore, TScheduleQueueStore>();
         services.AddStore<IBatchStore, TBatchStore>();
         services.AddStore<IJobStore, TJobStore>();
 
-        services.AddConcurrencyRateLimiting(schedulerOptions);
+        services.AddConcurrencyRateLimiting(configureOptions);
 
         SchedulerBuilder schedulerBuilder = new(services, []);
-
-        schedulerBuilder.Services.Configure(options);
 
         return schedulerBuilder;
     }
 
     #region Concurrency
 
-    private static void AddConcurrencyRateLimiting(this IServiceCollection services, SchedulerOptions schedulerOptions)
+    private static void AddConcurrencyRateLimiting(this IServiceCollection services, Action<SchedulerOptions> configureOptions)
     {
-        switch (schedulerOptions.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider)
+        SchedulerOptions snapshot = new();
+        configureOptions(snapshot);
+
+        switch (snapshot.ConcurrencyRateLimiter.ConcurrencyRateLimitProvider)
         {
             case ConcurrencyRateLimitProviders.Redis:
                 services.AddActivatedSingleton<IConcurrencyRateLimiterService, RedisRateLimiterService>();
@@ -176,21 +180,6 @@ public static class SchedulerExtensions
     }
 
     #endregion Stores
-
-    private static void ValidateOptions(SchedulerOptions schedulerOptions)
-    {
-        if (schedulerOptions.PeriodicTimerInterval < TimeSpan.FromSeconds(5) || schedulerOptions.PeriodicTimerInterval > TimeSpan.FromHours(1))
-        {
-            throw new ArgumentOutOfRangeException(nameof(schedulerOptions), "Scheduler - The periodic timer interval can only contain a value between 5 sec and 1 hour.");
-        }
-
-        TenantValidationService.ValidateTenantId(schedulerOptions.TenantId);
-
-        if (schedulerOptions.ConcurrencyRateLimiter is { ConcurrencyRateLimitProvider: ConcurrencyRateLimitProviders.Redis, ConnectionMultiplexerFactory: null })
-        {
-            throw new InvalidOperationException("Scheduler - The ConnectionMultiplexerFactory cannot be null if the concurrency is 'redis'");
-        }
-    }
 
     #endregion Privates
 }
